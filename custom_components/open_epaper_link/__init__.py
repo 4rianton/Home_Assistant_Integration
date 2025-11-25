@@ -400,6 +400,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Listen for changes to options
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
+    # Initialize optional time sync extension (service + auto-sync listener)
+    try:
+        from . import ext_time_sync
+        await ext_time_sync.async_setup(hass)
+    except Exception:
+        # Best-effort extension init; do not break setup on errors
+        pass
+
     return True
 
 
