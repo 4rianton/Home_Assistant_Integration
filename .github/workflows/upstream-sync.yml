@@ -1,0 +1,84 @@
+name: Sync upstream releases
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: OpenEpaperLink/Home_Assistant_Integration
+  SYNC_BRANCH: feature/sync-ap-time
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/${UPSTREAM_REPO}.git
+          git fetch upstream --tags
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+
+      - name: Determine latest upstream tag
+        id: tags
+        run: |
+          set -euo pipefail
+          latest_upstream=$(git tag --merged upstream/main --sort=-v:refname | head -n1)
+          if [ -z "$latest_upstream" ]; then
+            echo "latest_upstream=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sync_tag="${latest_upstream}-sync1"
+          echo "latest_upstream=$latest_upstream" >> "$GITHUB_OUTPUT"
+          echo "sync_tag=$sync_tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q "$sync_tag" >/dev/null; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Exit if already synced
+        if: steps.tags.outputs.already == 'true'
+        run: echo "Sync tag already exists; nothing to do."
+
+      - name: Rebase sync branch onto upstream/main
+        if: steps.tags.outputs.already != 'true'
+        run: |
+          set -euo pipefail
+          git checkout ${SYNC_BRANCH}
+          git rebase upstream/main
+
+      - name: Push branch and tag
+        if: steps.tags.outputs.already != 'true'
+        run: |
+          set -euo pipefail
+          sync_tag="${{ steps.tags.outputs.sync_tag }}"
+          git push origin ${SYNC_BRANCH} --force-with-lease
+          git tag "$sync_tag"
+          git push origin "$sync_tag"
+
+      - name: Create GitHub release
+        if: steps.tags.outputs.already != 'true'
+        env:
+          SYNC_TAG: ${{ steps.tags.outputs.sync_tag }}
+          UPSTREAM_TAG: ${{ steps.tags.outputs.latest_upstream }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases"
+          json=$(cat <<EOF
+{ "tag_name": "${SYNC_TAG}", "name": "${SYNC_TAG}", "target_commitish": "${SYNC_BRANCH}", "body": "Automated sync release based on upstream ${UPSTREAM_TAG} with sync-ap-time changes applied." }
+EOF
+)
+          curl -sSf -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "$api" -d "$json" || echo "Release creation failed (may already exist)."
