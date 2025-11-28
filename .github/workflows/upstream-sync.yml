@@ -48,6 +48,21 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check if release exists
+        id: release
+        if: steps.tags.outputs.latest_upstream != ''
+        env:
+          SYNC_TAG: ${{ steps.tags.outputs.sync_tag }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${SYNC_TAG}"
+          status=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" "$api")
+          if [ "$status" -eq 200 ]; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Exit if already synced
         if: steps.tags.outputs.already == 'true'
         run: echo "Sync tag already exists; nothing to do."
@@ -69,7 +84,7 @@ jobs:
           git push origin "$sync_tag"
 
       - name: Create GitHub release
-        if: steps.tags.outputs.already != 'true'
+        if: steps.tags.outputs.latest_upstream != '' && steps.release.outputs.release_exists != 'true'
         env:
           SYNC_TAG: ${{ steps.tags.outputs.sync_tag }}
           UPSTREAM_TAG: ${{ steps.tags.outputs.latest_upstream }}
